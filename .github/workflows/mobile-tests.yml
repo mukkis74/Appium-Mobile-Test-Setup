@@ -1,77 +1,69 @@
-name: Mobile Tests (Android & iOS)
+name: Mobile Tests (Android + iOS)
 
 on:
   push:
-    branches: [ "master", "main" ]
+    branches: [ "main", "master" ]
   pull_request:
 
 jobs:
+  ################################################
+  # ANDROID JOB
+  ################################################
   android:
-    name: Android UI tests (emulator + Docker)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Enable KVM so the emulator can use hardware acceleration
-      # (supported on GitHub-hosted Linux runners):contentReference[oaicite:4]{index=4}
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: 17
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
 
-      - name: Install Appium 2 + Android driver
+      - name: Install Appium (Server + Android Driver)
         run: |
           npm install -g appium
           appium driver install uiautomator2
-          appium -v
 
-      # Start Appium server on the host
-      - name: Start Appium server
+      - name: Start Appium Server
         run: |
-          nohup appium --log-level info:debug --base-path /wd/hub > appium.log 2>&1 &
-          sleep 15
+          nohup appium --address 0.0.0.0 --port 4723 --base-path /wd/hub > appium.log 2>&1 &
+          sleep 10
 
-      # Run Android emulator and tests INSIDE this step
-      - name: Run Android tests on emulator (tests in Docker)
+      - name: Run Android Emulator & Tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
           target: google_apis
           arch: x86_64
-          profile: pixel_7_pro
+          profile: pixel_7
           script: |
-            # Build Docker image for the test runner
-            docker build -t mobile-tests-runner .
+            mvn -B clean test -Dplatform=android \
+              -Dappium.server.url=http://127.0.0.1:4723/wd/hub
 
-            # Run tests in Docker, pointing to host Appium + emulator
-            # Ensure your config.properties uses these values:
-            #   platformName=Android
-            #   appium.server.url=http://127.0.0.1:4723/wd/hub
-            docker run --network host \
-              -e PLATFORM=android \
-              -e APPIUM_SERVER_URL=http://127.0.0.1:4723/wd/hub \
-              mobile-tests-runner mvn -B test -Dplatform=android
+      - name: Upload Allure Results (Android)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-results-android
+          path: target/allure-results
+          if-no-files-found: warn
 
-  ios:  
-      name: iOS UI tests (simulator, macOS)
-      runs-on: macos-latest
-      needs: android   # optional: only run when Android passed
+  ################################################
+  # iOS JOB
+  ################################################
+  ios:
+    runs-on: macos-latest
+    needs: android     # waits for Android job
 
-      steps:
+    steps:
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -79,55 +71,19 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: 17
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
 
-      - name: Install Appium 2 + XCUITest driver
+      - name: Install Appium (Server + xcuitest driver)
         run: |
           npm install -g appium
           appium driver install xcuitest
-          appium -v
 
-      # Boot a simulator (you may adjust device / runtime to what macos-latest provides)
       - name: Boot iOS Simulator
         run: |
-          xcrun simctl list devices
-          # Example: boot an existing device by name
           xcrun simctl boot "iPhone 15"
-          xcrun simctl bootstatus "iPhone 15" -b
-
-      - name: Start Appium server
-        run: |
-          nohup appium --log-level info:debug --base-path /wd/hub > appium-ios.log 2>&1 &
-          sleep 20
-
-      # Option A: run tests directly on the host (simpler)
-      - name: Run iOS tests with Maven
-        run: |
-          mvn -B test -Dplatform=ios
-      # -------------------------------
-      # OPTION A – SIMPLE: NO DOCKER
-      # -------------------------------
-      - name: Run iOS tests with Maven (no Docker)
-        run: |
-          mvn -B test -Dplatform=ios \
-            -Dappium.server.url=http://127.0.0.1:4723/wd/hub
-
-      # -------------------------------
-      # OPTION B – USING DOCKER
-      # Comment OUT Option A above and
-      # UNCOMMENT the two steps below.
-      # -------------------------------
-      # - name: Build Docker image for tests
-      #   run: docker build -t mobile-tests-runner .
-      #
-      # - name: Run iOS tests in Docker
-      #   run: |
-      #     docker run \
-      #       -e PLATFORM=ios \
-      #       -e APPIUM_SERVER_URL=http://host.docker.internal:4723/wd/hub \
-      #       mobile-tests-runner mvn -B test -Dplatform=ios
+          xcrun simctl bootstatus "
